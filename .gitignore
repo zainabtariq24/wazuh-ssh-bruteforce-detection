@@ -1,0 +1,5 @@
+# local artifacts / evidence you may not want public
+alerts.json
+*.log
+screenshots/*.png
+!screenshots/.gitkeep
