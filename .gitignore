@@ -1,5 +1,55 @@
-# local artifacts / evidence you may not want public
+# ---------------------------------------------------------------------------
+# Sensitive / un-redactable artifacts — NEVER commit these.
+#
+# The lab ran on a real network. Raw Wazuh output, dashboard exports, terminal
+# recordings and report PDFs all embed live internal IPs and hostnames, and the
+# ones baked into images cannot be redacted by find-and-replace. Anything
+# published in this repo is hand-sanitized first; the raw sources stay local.
+# ---------------------------------------------------------------------------
+
+# Raw Wazuh manager output (real srcip / agent.ip / manager hostname)
 alerts.json
+alerts*.json
+!evidence/alerts-sample.json     # the hand-sanitized excerpt is allowed
+archives*.json
+ossec.log
 *.log
+
+# Dashboard exports — spreadsheet rows carry live IPs
+*.xlsx
+*.xls
+*.csv
+
+# Terminal recordings / screencasts — shell prompts and IPs on every frame
+*.mp4
+*.mov
+*.m4v
+*.webm
+
+# Report / submission documents (embedded screenshots with IPs, personal details)
+*.pdf
+*.docx
+*.pptx
+
+# Screenshots must be redacted by hand before being un-ignored individually
 screenshots/*.png
+screenshots/*.jpg
+screenshots/*.jpeg
 !screenshots/.gitkeep
+
+# Credentials & key material
+*.pem
+*.key
+id_rsa*
+id_ed25519*
+known_hosts
+authorized_keys
+passwords.txt
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
+*.swp
+*~
+.idea/
+.vscode/
