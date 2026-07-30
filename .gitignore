@@ -10,10 +10,15 @@
 # Raw Wazuh manager output (real srcip / agent.ip / manager hostname)
 alerts.json
 alerts*.json
-!evidence/alerts-sample.json     # the hand-sanitized excerpt is allowed
 archives*.json
 ossec.log
 *.log
+
+# ...but the hand-sanitized excerpt IS published. This negation must sit after
+# the patterns above, and must NOT carry a trailing comment on the same line --
+# .gitignore has no inline comment syntax, so the '#' and everything after it
+# would become part of the pattern and the negation would silently match nothing.
+!evidence/alerts-sample.json
 
 # Dashboard exports — spreadsheet rows carry live IPs
 *.xlsx

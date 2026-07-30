@@ -1,0 +1,13 @@
+<!--
+  SSH brute-force detection needs NO custom decoder: Wazuh's built-in sshd
+  decoder already parses the failed-login lines (confirmed in the live alert as
+  decoder: sshd, with srcip/dstuser extracted). This file is optional and
+  additive; it re-extracts srcip/user from "Failed password" lines as a child
+  of the built-in decoder, purely to make the logic explicit.
+-->
+<decoder name="sshd-bruteforce">
+  <parent>sshd</parent>
+  <prematch>Failed password</prematch>
+  <regex offset="after_parent">Failed password for (\S+) from (\S+) port</regex>
+  <order>dstuser,srcip</order>
+</decoder>
