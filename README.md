@@ -1,7 +1,7 @@
 <h1 align="center">Wazuh SSH Brute-Force Detection &amp; Prevention</h1>
 
 <p align="center">
-  <em>Detecting an SSH brute-force attack with Wazuh — and stopping it at two independent layers.</em>
+  <em>A correct password, sitting in the attacker's wordlist, that never works.</em>
 </p>
 
 <p align="center">
@@ -9,6 +9,7 @@
   <img alt="Platform" src="https://img.shields.io/badge/lab-Ubuntu%20%7C%20Kali%20ARM64%20%7C%20macOS-333">
   <img alt="Focus" src="https://img.shields.io/badge/domain-Detection%20Engineering-c0392b">
   <img alt="Controls" src="https://img.shields.io/badge/controls-iptables%20%2B%20pam__faillock%20%2B%20auditd-1e8449">
+  <img alt="MITRE" src="https://img.shields.io/badge/MITRE-T1110.001%20%7C%20T1021.004-6c3483">
   <img alt="License" src="https://img.shields.io/badge/license-MIT-blue">
 </p>
 
@@ -16,26 +17,29 @@
 
 ## Overview
 
-A blue-team lab built on a **real distributed deployment** — three separate hosts, not a
+A blue-team lab on a **real distributed deployment** — three separate hosts, not a
 single-box tutorial. An attacker brute-forces SSH against a monitored victim; Wazuh
-correlates the failures into a single high-severity alert and then enforces two
-independent controls that stop the attack.
+correlates the failures into one high-severity alert and then enforces two independent
+controls that stop the attack.
 
-The result that makes it conclusive: **the correct password is deliberately placed in the
-attacker's wordlist, and is still never confirmed.** The account locks and the source IP
-is dropped before `hydra` ever reaches it.
+The design makes the outcome **falsifiable rather than illustrative**: the correct password
+is deliberately placed at line 8 of the attacker's wordlist. `hydra` still reports
+`0 valid password found`, because the account locks at attempt 3 and the source IP is
+dropped moments later. The credential is present, correct, and useless.
 
-**What this demonstrates**
+**What this project demonstrates**
 
-- Writing and validating a **custom Wazuh correlation rule** (frequency + `same_source_ip`)
-- Diagnosing why a rule copied from tutorials **silently never fires** — and fixing it
-- Wiring **active response** to convert detection into automated enforcement
-- Understanding why reactive blocking alone is insufficient, and **layering a pre-emptive control**
-- Independent forensic recording with **auditd**
+- Writing a **custom Wazuh correlation rule** (`frequency` + `same_source_ip`) and validating it
+- Root-causing why the rule ID used by nearly every published example **fails silently** — and proving the correct one from the stock ruleset
+- Wiring **active response** to turn detection into automated enforcement
+- Identifying the **timing gap** in reactive blocking (measured: ~2s) and layering a pre-emptive control that closes it
+- Independent forensic recording with **auditd**, including watches on the controls themselves
+- Documenting **limitations honestly** — evasion paths, false-positive profile, what was not tested
 
 > **Addressing note.** Every address in this repository is a placeholder
-> (`<attacker-ip>`, `<victim-ip>`, `<manager-ip>`). Live IPs, hostnames and raw
-> Wazuh output are redacted and kept out of version control.
+> (`<attacker-ip>`, `<victim-ip>`, `<manager-ip>`). Live IPs, hostnames, raw Wazuh
+> output, dashboard exports and terminal recordings are redacted or excluded from
+> version control — see [`evidence/README.md`](evidence/README.md).
 
 ---
 
@@ -80,52 +84,80 @@ flowchart LR
 | **Victim / Agent** | Kali (ARM64) | `sshd`, Wazuh agent, `pam_faillock`, `auditd`, `iptables` |
 | **Manager** | Ubuntu | Wazuh manager, indexer, dashboard |
 
-Full topology, pipeline and layer breakdown: **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**
+Full topology and pipeline breakdown → **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**
 
 ---
 
-## How it works
+## Detection
 
-```mermaid
-flowchart TD
-    A["Failed SSH login on victim"] --> B["sshd to journald"]
-    B --> C["Wazuh agent collects<br/>(journald only)"]
-    C --> D["Manager: wazuh-analysisd"]
-    D --> E["Built-in sshd decoder<br/>extracts srcip"]
-    E --> F["Rule 5760<br/>authentication failed"]
-    F --> G{"3 failures, same srcip,<br/>within 120s?"}
-    G -->|"no"| I["Logged only"]
-    G -->|"yes"| J["Rule 100100 — level 10"]
-    J --> K["firewall-drop<br/>active response"]
-    K --> L["Alert 651"]
-    K --> M["iptables DROP, 600s"]
+Individual failed logins are noise. Detection is **correlation**:
 
-    style J fill:#c0392b,color:#fff
-    style M fill:#1e8449,color:#fff
-    style I fill:#7f8c8d,color:#fff
+```xml
+<rule id="100100" level="10" frequency="3" timeframe="120">
+  <if_matched_sid>5760</if_matched_sid>
+  <same_source_ip />
+  <description>SSHD brute force: 3 failed login attempts from same source IP $(srcip)</description>
+  <group>authentication_failures,pci_dss_10.2.4,pci_dss_10.2.5,</group>
+</rule>
 ```
 
-1. The victim's sshd logs are collected via **journald** and shipped to the manager over `:1514`.
-2. Failed logins decode with Wazuh's built-in `sshd` decoder and classify as rule **5760**.
-3. Custom rule **100100** fires on **3 failures from one source IP within 120s**.
-4. That single alert drives **two independent controls** (below).
-5. **auditd** keeps a separate forensic record, independent of Wazuh.
+Five lines — and the interesting part is `5760`, not the `5716` used by most write-ups. In
+the stock ruleset, `5760` declares `<if_sid>5700,5716</if_sid>`: it is a **more specific
+child** of 5716. Wazuh files the alert under the most specific matching rule, so
+`<if_matched_sid>5716</if_matched_sid>` never accumulates. The rule does not error or warn —
+it simply never fires, which is the worst failure mode a detection can have.
 
-### Two layers, because one isn't enough
+Full write-up, including how to confirm the SID in your own environment →
+**[docs/DETECTION.md](docs/DETECTION.md)**
 
-Wazuh active response is **reactive** — it fires only after the event reaches the manager
-and the command travels back to the agent. `pam_faillock` needs no such round-trip.
+---
+
+## Prevention — two layers, because one has a gap
+
+Active response is **reactive**. Measured from the captured evidence, the round-trip from
+detection to enforcement is **~2 seconds**:
+
+```
+06:45:01.597   rule 100100 fires    (manager correlates 3 failures)
+06:45:03.617   alert 651            (iptables DROP applied on agent)
+                ~2.0s
+```
+
+`hydra -t 4` keeps guessing throughout that window — and if the manager is down, the block
+never arrives at all. So the network layer is containment, not the guarantee.
 
 | | Layer 1 — network | Layer 2 — account |
 |---|---|---|
 | Mechanism | Active response → `iptables` DROP | `pam_faillock` (`deny=3`) |
-| Timing | **Reactive** — after manager round-trip | **Pre-emptive** — inside the auth path |
-| Scope | Blocks that source IP entirely | Locks that account from any source |
-| Needs Wazuh up? | Yes | **No** |
-| Duration | 600s | 600s |
+| Decision made on | Manager | Victim, locally |
+| Timing | **Reactive** — ~2s round-trip | **Pre-emptive** — inside the auth path |
+| Scope | That source IP, all services | That account, from any source |
+| Survives manager outage? | **No** | **Yes** |
+| Bypassed by | Rotating source address | Targeting a different account |
 
-Because `pam_faillock`'s `preauth` check runs *before* the password is evaluated, a locked
-account refuses **even valid credentials** for the full window.
+`pam_faillock`'s `preauth` module runs **before** `pam_unix` evaluates the password, so a
+locked account refuses **even valid credentials**. Their weaknesses are complementary,
+which is the whole argument for layering.
+
+Configuration, PAM stack ordering traps, and the auditd forensic layer →
+**[docs/PREVENTION.md](docs/PREVENTION.md)**
+
+---
+
+## Results
+
+| Metric | Value |
+|--------|-------|
+| Failures to trigger detection | **3** within 120s |
+| Detection latency (3rd failure → alert) | **sub-second** |
+| Enforcement latency (alert → iptables DROP) | **~2.0s** |
+| Attack attempts collapsed into one alert | **10 → 1** |
+| Correct password confirmed by hydra | **No** |
+| False positives during the run | **0** |
+
+Timeline, per-source verification, host-side confirmation, and a frank list of
+limitations (slow-attack evasion, source rotation, password spraying) →
+**[docs/RESULTS.md](docs/RESULTS.md)**
 
 ---
 
@@ -139,55 +171,63 @@ account refuses **even valid credentials** for the full window.
 
 Dashboard filter: `rule.id:(5760 OR 100100 OR 651)`
 
----
-
-## The detection rule
-
-```xml
-<rule id="100100" level="10" frequency="3" timeframe="120">
-  <if_matched_sid>5760</if_matched_sid>
-  <same_source_ip />
-  <description>SSHD brute force: 3 failed login attempts from same source IP $(srcip)</description>
-  <group>authentication_failures,pci_dss_10.2.4,pci_dss_10.2.5,</group>
-</rule>
-```
-
-Five lines — and the reason it works is `5760`, not the `5716` every tutorial uses. On a
-modern OpenSSH build logging through journald, a rule built on `5716` matches nothing and
-**fails silently**.
-
-Deploy it on the manager, and validate *before* restarting — a malformed ruleset takes the
-whole manager down, not just the new rule:
-
-```bash
-sudo cp rules/local_rules.xml /var/ossec/etc/rules/local_rules.xml
-sudo /var/ossec/bin/wazuh-analysisd -t          # ALWAYS validate first
-sudo systemctl restart wazuh-manager
-```
-
-The lab requires a **private NAT / host-only network** with pinned IPs. A bridged LAN with
-client isolation breaks attacker→victim port 22 while leaving agent→manager working — an
-asymmetric failure that is genuinely confusing to debug.
+MITRE ATT&CK: [T1110](https://attack.mitre.org/techniques/T1110/) ·
+[T1110.001](https://attack.mitre.org/techniques/T1110.001/) ·
+[T1021.004](https://attack.mitre.org/techniques/T1021.004/)
 
 ---
 
 ## Repository layout
 
 ```
-rules/local_rules.xml       # detection rule 100100   (manager)
-docs/ARCHITECTURE.md        # topology, pipeline, enforcement layers
+rules/local_rules.xml                    # detection rule 100100          (manager)
+decoders/local_decoder.xml               # additive decoder, annotated    (manager)
+manager-ubuntu/ossec-active-response...  # active-response block          (manager)
+agent-kali/faillock.conf                 # account lockout policy         (agent)
+agent-kali/common-auth.auth-section      # PAM stack wiring               (agent)
+agent-kali/ssh-forensics.rules           # auditd forensic watches        (agent)
+attack/run-attack.sh, wordlist.txt       # the attack                     (attacker)
+evidence/alerts-sample.json              # redacted alert output
+docs/ARCHITECTURE.md                     # topology, pipeline, layers
+docs/DETECTION.md                        # decoding, the SID problem, correlation
+docs/PREVENTION.md                       # both controls + auditd forensics
+docs/RESULTS.md                          # timeline, metrics, limitations
+docs/RUNBOOK.md                          # step-by-step build + verification
+docs/LESSONS.md                          # what broke, and the fixes
+docs/BLOG.md                             # narrative write-up
 ```
 
-Agent-side configuration, the active-response block, the attack harness, sanitized alert
-evidence and the full runbook are being added as the write-up is completed.
+---
+
+## Quick start
+
+Full build and verification → **[docs/RUNBOOK.md](docs/RUNBOOK.md)**. Short version:
+
+```bash
+# MANAGER (Ubuntu) — detection rule
+sudo cp rules/local_rules.xml /var/ossec/etc/rules/local_rules.xml
+sudo /var/ossec/bin/wazuh-analysisd -t          # ALWAYS validate before restarting
+sudo systemctl restart wazuh-manager
+
+# MANAGER — active response: merge manager-ubuntu/ snippet into ossec.conf
+# AGENT (Kali) — lockout policy, PAM wiring, auditd rules: see RUNBOOK steps 5-6
+
+# ATTACKER
+./attack/run-attack.sh <victim-ip>
+```
+
+Requires a **private NAT / host-only network** with pinned IPs. A bridged LAN with client
+isolation breaks attacker→victim port 22 while leaving agent→manager working — an
+asymmetric failure that is genuinely confusing to debug, and one of five documented in
+[docs/LESSONS.md](docs/LESSONS.md).
 
 ---
 
 ## Scope and ethics
 
-An educational lab on an isolated network against a throwaway `demo` account on VMs under
-my own control. `hydra` and the included wordlist are here to *generate the detection
-signal*; do not point them at systems you are not authorized to test.
+An educational lab on an isolated network, targeting a throwaway `demo` account on VMs
+under my own control. `hydra` and the bundled wordlist exist to *generate the detection
+signal*. Do not point them at systems you are not authorized to test.
 
 ## License
 

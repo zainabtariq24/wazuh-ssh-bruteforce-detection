@@ -1,0 +1,29 @@
+## Auditd rules — SSH hardening / forensics
+## Install on the AGENT: /etc/audit/rules.d/ssh-forensics.rules
+## Enable + load:
+##   sudo systemctl enable --now auditd && sudo auditctl -e 1
+##   sudo augenrules --load && sudo auditctl -l   # confirm rules loaded
+
+## Record executed commands (what an attacker ran post-compromise)
+-a always,exit -F arch=b64 -S execve -k exec_trace
+
+## sshd configuration tampering
+-w /etc/ssh/sshd_config    -p wa -k sshd_config_changes
+-w /etc/ssh/sshd_config.d/ -p wa -k sshd_config_changes
+
+## credential + account files
+-w /etc/passwd -p wa -k passwd_changes
+-w /etc/shadow -p wa -k shadow_changes
+-w /etc/group  -p wa -k group_changes
+
+## authentication stack + lockout policy
+-w /etc/pam.d/                 -p wa -k pam_changes
+-w /etc/security/faillock.conf -p wa -k faillock_config_changes
+
+## authorized_keys (SSH persistence path). Use per-user watches; the generic
+## dir=/home + relative path= form is invalid auditd syntax and is rejected.
+-w /root/.ssh/authorized_keys      -p wa -k ssh_authorized_keys_root
+-w /home/demo/.ssh/authorized_keys -p wa -k ssh_authorized_keys_users
+
+## auth.log tampering (host still writes sudo/PAM events here)
+-w /var/log/auth.log -p wa -k auth_log_tampering

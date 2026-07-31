@@ -1,0 +1,114 @@
+[
+  {
+    "_comment": "REDACTED SAMPLE — see evidence/README.md. Real IPs, hostnames and the manager name are replaced with placeholders. Wazuh writes alerts.json as newline-delimited JSON; this file is a pretty-printed array for readability.",
+    "_note": "1/4 — the correlated brute-force detection. frequency=3 satisfied, so rule 100100 fires once for three underlying 5760 failures. previous_output carries the two prior failures that completed the window."
+  },
+  {
+    "timestamp": "2026-07-29T06:45:01.597+0000",
+    "rule": {
+      "level": 10,
+      "description": "SSHD brute force: 3 failed login attempts from same source IP <attacker-ip>",
+      "id": "100100",
+      "frequency": 3,
+      "firedtimes": 1,
+      "mail": false,
+      "groups": ["local", "syslog", "sshd", "authentication_failures"]
+    },
+    "agent": { "id": "001", "name": "kali-agent", "ip": "<victim-ip>" },
+    "manager": { "name": "wazuh-manager" },
+    "id": "1785307501.84112",
+    "previous_output": "Jul 29 06:44:55 victim-kali sshd-session[141207]: Failed password for demo from <attacker-ip> port 61584 ssh2\nJul 29 06:44:47 victim-kali sshd-session[141207]: Failed password for demo from <attacker-ip> port 61584 ssh2",
+    "full_log": "Jul 29 06:45:00 victim-kali sshd-session[141207]: Failed password for demo from <attacker-ip> port 61584 ssh2",
+    "predecoder": {
+      "program_name": "sshd-session",
+      "timestamp": "Jul 29 06:45:00",
+      "hostname": "victim-kali"
+    },
+    "decoder": { "parent": "sshd", "name": "sshd" },
+    "data": { "srcip": "<attacker-ip>", "srcport": "61584", "dstuser": "demo" },
+    "location": "journald"
+  },
+
+  {
+    "_note": "2/4 — enforcement. Alert 651 follows ~2s after 100100: the manager dispatched firewall-drop to the agent, which added the iptables DROP. This 2s gap is exactly why active response alone is insufficient and pam_faillock is layered alongside it."
+  },
+  {
+    "timestamp": "2026-07-29T06:45:03.617+0000",
+    "rule": {
+      "level": 3,
+      "description": "Host Blocked by firewall-drop Active Response",
+      "id": "651",
+      "firedtimes": 1,
+      "mail": false,
+      "groups": ["ossec", "active_response"],
+      "pci_dss": ["11.4"],
+      "gpg13": ["4.13"],
+      "gdpr": ["IV_35.7.d"],
+      "nist_800_53": ["SI.4"],
+      "tsc": ["CC6.1", "CC6.8", "CC7.2", "CC7.3", "CC7.4"]
+    },
+    "agent": { "id": "001", "name": "kali-agent", "ip": "<victim-ip>" },
+    "manager": { "name": "wazuh-manager" },
+    "id": "1785307503.85234",
+    "full_log": "Jul 29 06:45:03 victim-kali firewall-drop: add srcip <attacker-ip>",
+    "decoder": { "name": "ar_log_json" },
+    "data": { "srcip": "<attacker-ip>" },
+    "location": "active-response"
+  },
+
+  {
+    "_note": "3/4 — same detection from a second source address, demonstrating same_source_ip works as intended: this is tracked as its own independent window rather than being pooled with <attacker-ip>."
+  },
+  {
+    "timestamp": "2026-07-29T06:52:18.204+0000",
+    "rule": {
+      "level": 10,
+      "description": "SSHD brute force: 3 failed login attempts from same source IP <attacker-ip-2>",
+      "id": "100100",
+      "frequency": 3,
+      "firedtimes": 2,
+      "mail": false,
+      "groups": ["local", "syslog", "sshd", "authentication_failures"]
+    },
+    "agent": { "id": "001", "name": "kali-agent", "ip": "<victim-ip>" },
+    "manager": { "name": "wazuh-manager" },
+    "id": "1785307938.91007",
+    "previous_output": "Jul 29 06:52:12 victim-kali sshd-session[141882]: Failed password for demo from <attacker-ip-2> port 52310 ssh2\nJul 29 06:52:05 victim-kali sshd-session[141882]: Failed password for demo from <attacker-ip-2> port 52310 ssh2",
+    "full_log": "Jul 29 06:52:17 victim-kali sshd-session[141882]: Failed password for demo from <attacker-ip-2> port 52310 ssh2",
+    "predecoder": {
+      "program_name": "sshd-session",
+      "timestamp": "Jul 29 06:52:17",
+      "hostname": "victim-kali"
+    },
+    "decoder": { "parent": "sshd", "name": "sshd" },
+    "data": { "srcip": "<attacker-ip-2>", "srcport": "52310", "dstuser": "demo" },
+    "location": "journald"
+  },
+
+  {
+    "_note": "4/4 — enforcement for the second source. Both sources end up dropped independently, each with its own 600s timeout."
+  },
+  {
+    "timestamp": "2026-07-29T06:52:20.881+0000",
+    "rule": {
+      "level": 3,
+      "description": "Host Blocked by firewall-drop Active Response",
+      "id": "651",
+      "firedtimes": 2,
+      "mail": false,
+      "groups": ["ossec", "active_response"],
+      "pci_dss": ["11.4"],
+      "gpg13": ["4.13"],
+      "gdpr": ["IV_35.7.d"],
+      "nist_800_53": ["SI.4"],
+      "tsc": ["CC6.1", "CC6.8", "CC7.2", "CC7.3", "CC7.4"]
+    },
+    "agent": { "id": "001", "name": "kali-agent", "ip": "<victim-ip>" },
+    "manager": { "name": "wazuh-manager" },
+    "id": "1785307940.92115",
+    "full_log": "Jul 29 06:52:20 victim-kali firewall-drop: add srcip <attacker-ip-2>",
+    "decoder": { "name": "ar_log_json" },
+    "data": { "srcip": "<attacker-ip-2>" },
+    "location": "active-response"
+  }
+]

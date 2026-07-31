@@ -1,0 +1,55 @@
+<!--
+  Active response  ->  /var/ossec/etc/ossec.conf on the MANAGER (Ubuntu)
+
+  Add these blocks inside the existing top-level <ossec_config>. Do NOT wrap them
+  in a second <ossec_config> element and do not nest them inside another block.
+
+  When rule 100100 fires, firewall-drop adds an iptables DROP for the attacker's
+  source IP on the AGENT that reported the event (location=local), for 600s.
+  The agent logs the action to /var/ossec/logs/active-responses.log and the
+  manager raises alert 651.
+
+  Apply with:
+      sudo /var/ossec/bin/wazuh-analysisd -t     # validate before restarting
+      sudo systemctl restart wazuh-manager
+-->
+
+  <!--
+    Command definitions. Both scripts ship with Wazuh in /var/ossec/active-response/bin.
+    timeout_allowed=yes is what permits the <timeout> below to auto-revert the block;
+    without it the rule would apply and never expire.
+  -->
+  <command>
+    <name>firewall-drop</name>
+    <executable>firewall-drop</executable>
+    <timeout_allowed>yes</timeout_allowed>
+  </command>
+
+  <!--
+    host-deny (TCP wrappers / hosts.deny) is defined here as an alternative
+    enforcement path but is deliberately NOT wired to a rule. firewall-drop is
+    the control actually in use, because iptables drops the traffic before sshd
+    sees it, whereas hosts.deny relies on the daemon honouring TCP wrappers.
+  -->
+  <command>
+    <name>host-deny</name>
+    <executable>host-deny</executable>
+    <timeout_allowed>yes</timeout_allowed>
+  </command>
+
+  <!--
+    The binding: rule 100100 -> firewall-drop.
+
+    location=local   run on the agent that generated the event, not the manager
+                     (the attacker's packets have to be dropped at the victim)
+    rules_id=100100  only the correlated brute-force alert triggers this, never
+                     an individual 5760 failure
+    timeout=600      the DROP is removed automatically after 600s, matching the
+                     pam_faillock unlock_time on the agent
+  -->
+  <active-response>
+    <command>firewall-drop</command>
+    <location>local</location>
+    <rules_id>100100</rules_id>
+    <timeout>600</timeout>
+  </active-response>
